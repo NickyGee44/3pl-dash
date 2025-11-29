@@ -1,0 +1,192 @@
+region_map:
+  BC: West
+  AB: West
+  SK: West
+  MB: West
+  ON: Ontario
+  QC: Quebec
+  NB: Maritimes
+  NS: Maritimes
+  NL: Maritimes
+  PE: Maritimes
+  YT: Territories
+  NT: Territories
+  NU: Territories
+  default: Unknown
+
+shipments:
+  "Shipment Data July to December 2024.xlsx":
+    defaults:
+      columns:
+        # Shipment reference
+        PRONUMBER: shipment_ref
+        # Origin (shipper) fields - SHCITY determines origin_dc
+        SHPCITY: origin_city
+        SHCITY: origin_city
+        SHPST: origin_province
+        SHPPC: origin_postal
+        SHPOSTAL: origin_postal
+        SHNAME: origin_name
+        SHADD1: origin_address
+        # Destination (consignee) fields
+        CNPCITY: dest_city
+        CNCITY: dest_city
+        CCITY: dest_city
+        CNPST: dest_province
+        CPROV: dest_province
+        CNPPC: dest_postal
+        CPOSTAL: dest_postal
+        CNNAME: dest_name
+        CNADD1: dest_address
+        # Weight and charge
+        INVPCS: pallets
+        INVWGT: weight
+        PRBWGT: billed_weight
+        TRFAMT: charge
+        # Transit and POD
+        STANDD: std_transit_days
+        ACTDYS: actual_transit_days
+        SIGNED: pod_signed
+        Signature: pod_signature
+        "Customer Ref": customer_ref
+    sheets:
+      "CLG_Data-July_December 2024":
+        # Calgary sheet - origin_dc will be inferred from SHCITY
+        notes: "Calgary DC outbound shipments"
+      "SC-Data July_December 2024":
+        # Scarborough sheet - origin_dc will be inferred from SHCITY
+        notes: "Scarborough DC outbound shipments"
+
+summary_files:
+  "Shipment Data LTL-July-Dec-2024-Segregated by Region-Report2.xlsx":
+    tables:
+      region_summary:
+        sheet: "Information For Every Region"
+        columns:
+          Region: region
+          Total Number of Shipments: shipments
+          Average Pallets Count Per Shipment: avg_pallets
+          Average Revise Weight Per Shipment: avg_weight
+      locations_all:
+        sheet: "Top 10 Delivery Location (All"
+        columns: &top_locations_columns
+          No.: rank
+          Location: dest_city
+          Shipments: shipments
+      locations_west:
+        sheet: "Table 2-Western Canada"
+        columns: *top_locations_columns
+      locations_on:
+        sheet: "Table 3- Ontario"
+        columns: *top_locations_columns
+      locations_qc:
+        sheet: "Table 4-Quebec"
+        columns: *top_locations_columns
+      locations_maritimes:
+        sheet: "Table 5-Maritimes"
+        columns: *top_locations_columns
+      locations_territories:
+        sheet: "Table 6-Territories"
+        columns: *top_locations_columns
+
+tariffs:
+  "APPS FAK Skid Rates 2025.xlsx":
+    carrier_name: APPS
+    origin_dc: SCARB
+    tariff_type: SKID_SPOT
+    sheet: Sheet1
+    dest_city_column: Destination
+    dest_province_column: PROV
+    spot_columns: ["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22"]
+
+  "Rosedale Ex Toronto 2025 10lbs cwt.xlsx":
+    carrier_name: Rosedale
+    origin_dc: SCARB
+    tariff_type: CWT
+    sheet: Sheet1
+    dest_city_column: Destination
+    dest_province_column: PROV
+    min_charge_column: MIN
+    # Rosedale uses CWT column naming where the number = CWT (hundredweight)
+    # L5CWT = Less than 5 CWT = 0-499 lb
+    # 5CWT = 5 CWT break = 500-999 lb
+    # 10CWT = 10 CWT break = 1000-1999 lb
+    # 20CWT = 20 CWT break = 2000-2999 lb
+    # 30CWT = 30 CWT break = 3000-4999 lb
+    # 50CWT = 50 CWT break = 5000-9999 lb
+    # 100CWT = 100 CWT break = 10000-19999 lb
+    # etc.
+    breaks: &rosedale_breaks
+      - column: L5CWT
+        from: 0
+        to: 500
+      - column: 5CWT
+        from: 500
+        to: 1000
+      - column: 10CWT
+        from: 1000
+        to: 2000
+      - column: 20CWT
+        from: 2000
+        to: 3000
+      - column: 30CWT
+        from: 3000
+        to: 5000
+      - column: 50CWT
+        from: 5000
+        to: 10000
+      - column: 100CWT
+        from: 10000
+        to: 20000
+      - column: 200CWT
+        from: 20000
+        to: 30000
+      - column: 300CWT
+        from: 30000
+        to: 50000
+      - column: 500CWT
+        from: 50000
+        to: 100000
+      - column: 1000CWT
+        from: 100000
+        to: null
+
+  "MO ex TOR  10lbs cwt Maritimes 2025.xlsx":
+    carrier_name: Maritime Ontario
+    origin_dc: SCARB
+    tariff_type: CWT
+    sheet: Sheet1
+    dest_city_column: Destination
+    dest_province_column: PROV
+    min_charge_column: MIN
+    breaks: *rosedale_breaks
+
+  "Groupe Guilbault exTOR 15cwt 2025.xlsx":
+    carrier_name: Groupe Guilbault
+    origin_dc: SCARB
+    tariff_type: CWT
+    sheet: Sheet1
+    dest_city_column: CITY
+    dest_province_column: PROV
+    min_charge_column: MIN
+    # Standard breaks per TransX analyst model:
+    # LTL = 0-499 lb, 500 = 500-999 lb, 1000 = 1000-1999 lb
+    # 2000 = 2000-4999 lb, 5000 = 5000-9999 lb, 10000 = 10000+ lb
+    breaks: &gg_breaks
+      - {column: LTL, from: 0, to: 500}
+      - {column: "500", from: 500, to: 1000}
+      - {column: "1000", from: 1000, to: 2000}
+      - {column: "2000", from: 2000, to: 5000}
+      - {column: "5000", from: 5000, to: 10000}
+      - {column: "10000", from: 10000, to: null}
+
+  "CFF ex CGY 10lbs cwt to Western Canada Saftey Express 2025.xlsx":
+    carrier_name: CFF
+    origin_dc: CGY
+    tariff_type: CWT
+    sheet: Sheet1
+    dest_city_column: Destination
+    dest_province_column: PROV
+    min_charge_column: MIN
+    breaks: *gg_breaks
+
