@@ -10,7 +10,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Get settings from environment
-database_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/3pl_audit")
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise ValueError(
+        "DATABASE_URL environment variable is required. "
+        "Please set it in your .env file or environment."
+    )
 upload_dir = os.getenv("UPLOAD_DIR", "./uploads")
 
 class Settings:
