@@ -19,6 +19,15 @@ interface SheetOption {
   category: UploadCategory
 }
 
+const REQUIRED_MAPPING_GROUPS = [
+  { label: 'Origin City', targets: ['origin_city'] },
+  { label: 'Origin Province', targets: ['origin_province'] },
+  { label: 'Destination City', targets: ['dest_city'] },
+  { label: 'Destination Province', targets: ['dest_province'] },
+  { label: 'Charge', targets: ['charge'] },
+  { label: 'Weight (Scale/Billed/Dim)', targets: ['weight', 'billed_weight', 'dim_weight'] },
+]
+
 const normalizedFieldOptions = [
   { value: '', label: 'Unmapped' },
   { value: 'shipment_ref', label: 'Shipment Reference' },
@@ -26,16 +35,26 @@ const normalizedFieldOptions = [
   { value: 'origin_city', label: 'Origin City' },
   { value: 'origin_province', label: 'Origin Province' },
   { value: 'origin_postal', label: 'Origin Postal' },
+  { value: 'origin_name', label: 'Origin Name' },
+  { value: 'origin_address', label: 'Origin Address' },
   { value: 'dest_city', label: 'Destination City' },
   { value: 'dest_province', label: 'Destination Province' },
   { value: 'dest_postal', label: 'Destination Postal' },
+  { value: 'dest_name', label: 'Destination Name' },
+  { value: 'dest_address', label: 'Destination Address' },
   { value: 'dest_region', label: 'Destination Region' },
   { value: 'ship_date', label: 'Ship Date' },
   { value: 'pallets', label: 'Pallets' },
   { value: 'weight', label: 'Scale Weight' },
+  { value: 'billed_weight', label: 'Billed Weight' },
   { value: 'dim_weight', label: 'Dim Weight' },
   { value: 'charge', label: 'Actual Charge' },
   { value: 'carrier', label: 'Carrier' },
+  { value: 'customer_ref', label: 'Customer Reference' },
+  { value: 'std_transit_days', label: 'Std Transit Days' },
+  { value: 'actual_transit_days', label: 'Actual Transit Days' },
+  { value: 'pod_signed', label: 'POD Signed' },
+  { value: 'pod_signature', label: 'POD Signature' },
 ]
 
 export default function NewAuditWizard() {
@@ -301,6 +320,28 @@ export default function NewAuditWizard() {
 
   const handleNormalizeAndRun = async () => {
     if (!auditRunId) return
+
+    const getMissingRequiredLabels = (fileMappings: ColumnMapping[]): string[] => {
+      const mappedTargets = new Set(
+        fileMappings
+          .map((mapping) => mapping.target_field)
+          .filter((target): target is string => Boolean(target))
+      )
+      return REQUIRED_MAPPING_GROUPS
+        .filter((group) => !group.targets.some((target) => mappedTargets.has(target)))
+        .map((group) => group.label)
+    }
+
+    for (const file of uploadedFiles) {
+      const fileMappings = mappings[file.id] || []
+      const missingLabels = getMissingRequiredLabels(fileMappings)
+      if (missingLabels.length > 0) {
+        alert(
+          `Cannot run audit yet. ${file.original_filename} is missing required mappings: ${missingLabels.join(', ')}.`
+        )
+        return
+      }
+    }
 
     setProcessing(true)
     setProgressLabel('Normalizing files and running audit...')

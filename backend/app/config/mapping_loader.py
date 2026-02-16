@@ -39,10 +39,34 @@ def get_region_from_config(province: Optional[str]) -> Optional[str]:
 def _match_file_config(section: str, filename: str) -> Optional[Dict[str, Any]]:
     config = load_mapping_config().get(section, {})
     filename_lower = filename.lower()
+    filename_stem_lower = Path(filename).stem.lower()
+    filename_slug = _slugify(filename_stem_lower)
+    best_match: Optional[Dict[str, Any]] = None
+    best_score = -1
+    best_key_len = -1
+
     for key, value in config.items():
-        if key.lower() in filename_lower:
-            return value
-    return None
+        key_text = str(key).lower()
+        key_stem = Path(key_text).stem.lower()
+        key_slug = _slugify(key_stem)
+
+        score = -1
+        if key_text in filename_lower:
+            # Exact configured text match (including extension) is strongest.
+            score = 300
+        elif key_stem and key_stem in filename_stem_lower:
+            # Same source file stem but different runtime extension (e.g., .xlsx -> .csv).
+            score = 220
+        elif key_slug and key_slug in filename_slug:
+            # Fuzzy slug match for sanitized upload names.
+            score = 150
+
+        if score > best_score or (score == best_score and len(key_stem) > best_key_len):
+            best_match = value
+            best_score = score
+            best_key_len = len(key_stem)
+
+    return best_match
 
 
 def _match_sheet_config(file_cfg: Dict[str, Any], filename: str, sheet_name: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -85,4 +109,3 @@ def get_tariff_mapping_for_file(filename: str, carrier_name: Optional[str] = Non
                 continue
             return value
     return None
-
