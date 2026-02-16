@@ -28,8 +28,8 @@ export default function TariffLibrary() {
     setLoading(true)
     setError(null)
     try {
-      // Avoid backend redirect from /api/tariffs -> /api/tariffs/ (can break behind proxies).
-      const response = await api.get('/tariffs/')
+      // Avoid backend redirect from /api/tariffs/ -> /api/tariffs (can break behind proxies).
+      const response = await api.get('/tariffs')
       setTariffs(response.data)
     } catch (err) {
       console.error('Error loading tariffs', err)
@@ -50,8 +50,8 @@ export default function TariffLibrary() {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const response = await api.post(`/tariffs/ingest?carrier_name=${encodeURIComponent(carrier)}`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      const response = await api.post('/tariffs/ingest', formData, {
+        params: { carrier_name: carrier },
       })
       setFile(null)
       await fetchTariffs()

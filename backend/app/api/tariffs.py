@@ -117,7 +117,8 @@ async def ingest_tariff_file(
             file_path.unlink()
 
 
-@router.get("/", response_model=List[TariffResponse])
+@router.get("", response_model=List[TariffResponse])
+@router.get("/", response_model=List[TariffResponse], include_in_schema=False)
 async def list_tariffs(
     carrier_name: Optional[str] = None,
     origin_dc: Optional[str] = None,
