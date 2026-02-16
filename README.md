@@ -4,11 +4,30 @@ A web platform for freight audit and analytics that normalizes shipment data fro
 
 ## Architecture
 
-- **Backend**: Python 3 + FastAPI
+- **Backend**: Python 3 + FastAPI 0.115.6
 - **Database**: PostgreSQL
-- **Frontend**: React + TypeScript (Vite)
-- **Data Processing**: pandas
-- **LLM Integration**: OpenAI API (ChatGPT)
+- **Frontend**: React 18 + TypeScript (Vite 7)
+- **Data Processing**: pandas 2.2.3, numpy 2.2.2
+- **LLM Integration**: OpenAI API 1.60.0 (ChatGPT)
+- **UI Icons**: lucide-react
+
+### Key Dependencies
+
+**Backend:**
+- FastAPI 0.115.6 (async web framework)
+- SQLAlchemy 2.0.36 (ORM)
+- Alembic 1.14.0 (migrations)
+- pandas 2.2.3 (data processing)
+- OpenAI 1.60.0 (AI summaries)
+- Pydantic 2.10.5 (validation)
+
+**Frontend:**
+- React 18.2
+- TypeScript 5.2
+- Vite 7.3.1
+- lucide-react (icons)
+- recharts 2.10 (charts)
+- axios 1.6 (HTTP client)
 
 ## Project Structure
 
@@ -116,9 +135,24 @@ npm run dev
 
 ## Environment Variables
 
-- `DATABASE_URL`: PostgreSQL connection string
-- `OPENAI_API_KEY`: OpenAI API key for report generation (optional)
+See `backend/.env.example` for a complete template.
+
+### Required
+- `DATABASE_URL`: PostgreSQL connection string (e.g., `postgresql://user:pass@localhost:5432/3pl_links`)
+
+### Optional
+- `OPENAI_API_KEY`: OpenAI API key for AI-powered executive summaries
 - `UPLOAD_DIR`: Directory for uploaded files (default: `./uploads`)
+- `CORS_ORIGINS`: Comma-separated list of allowed origins (default: `http://localhost:3000,http://localhost:5173`)
+- `SECRET_KEY`: Application secret for signing (production only)
+- `ENVIRONMENT`: `development` or `production`
+- `DEBUG`: `true` or `false`
+
+### Setup
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env with your configuration
+```
 
 ## Development
 
@@ -127,6 +161,24 @@ The platform is designed to be extensible:
 - Extend audit engine with new metrics in `backend/app/services/audit_engine.py`
 - Customize LLM prompts in `backend/app/services/llm_reports.py`
 - Add new UI components in `frontend/src/components/`
+
+## Recent Updates
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
+
+### Latest (2026-02-15)
+- ✅ Updated all Python dependencies (FastAPI 0.115, OpenAI 1.60, pandas 2.2)
+- ✅ Fixed TypeScript build errors
+- ✅ Replaced emoji icons with lucide-react
+- ✅ Added skeleton loaders for better UX
+- ✅ Enhanced mobile responsiveness
+- ✅ Added request ID middleware for tracing
+- ✅ Improved CORS configuration
+- ⚠️ xlsx vulnerability (no fix available - see SECURITY.md)
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for security audit and recommendations.
 
 ## License
 

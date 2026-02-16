@@ -2,16 +2,33 @@
 Main FastAPI application entry point.
 """
 import logging
-from fastapi import FastAPI
+import uuid
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import audits, files, reports, customers, tariffs
 from app.db.database import engine, Base
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s'
 )
+
+logger = logging.getLogger(__name__)
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Add unique request ID to each request for tracing."""
+    
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get('X-Request-ID', str(uuid.uuid4()))
+        request.state.request_id = request_id
+        
+        response = await call_next(request)
+        response.headers['X-Request-ID'] = request_id
+        
+        return response
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -22,13 +39,21 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware
+# Request ID middleware (must be added first)
+app.add_middleware(RequestIDMiddleware)
+
+# CORS middleware with enhanced configuration
+import os
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev servers
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+    max_age=3600,
 )
 
 # Include routers

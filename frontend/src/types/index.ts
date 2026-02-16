@@ -23,6 +23,7 @@ export interface AuditRun {
     carrier_savings_total?: number
     consolidation_savings_total?: number
     total_opportunity?: number
+    theoretical_savings?: number
     consolidation_groups?: ConsolidationOpportunity[]
   }
 }

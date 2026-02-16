@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { BarChart3, Package, DollarSign, TrendingUp, FileText } from 'lucide-react'
 import api from '../api/client'
 import { AuditRunSummary } from '../types'
 import './Dashboard.css'
@@ -56,9 +57,22 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="dashboard-loading">
-        <div className="spinner-large"></div>
-        <p>Loading dashboard...</p>
+      <div className="dashboard">
+        <div className="dashboard-hero">
+          <div className="skeleton skeleton-title"></div>
+          <div className="skeleton skeleton-subtitle"></div>
+        </div>
+        <div className="metrics-grid">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="metric-card skeleton-card">
+              <div className="skeleton skeleton-icon"></div>
+              <div className="metric-content">
+                <div className="skeleton skeleton-text"></div>
+                <div className="skeleton skeleton-value"></div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -78,7 +92,9 @@ export default function Dashboard() {
       {/* Key Metrics Cards */}
       <div className="metrics-grid">
         <div className="metric-card primary">
-          <div className="metric-icon">📊</div>
+          <div className="metric-icon">
+            <BarChart3 size={24} />
+          </div>
           <div className="metric-content">
             <div className="metric-label">Total Audits</div>
             <div className="metric-value">{stats.totalAudits}</div>
@@ -86,7 +102,9 @@ export default function Dashboard() {
         </div>
 
         <div className="metric-card">
-          <div className="metric-icon">📦</div>
+          <div className="metric-icon">
+            <Package size={24} />
+          </div>
           <div className="metric-content">
             <div className="metric-label">Total Shipments</div>
             <div className="metric-value">{formatNumber(stats.totalShipments)}</div>
@@ -94,7 +112,9 @@ export default function Dashboard() {
         </div>
 
         <div className="metric-card">
-          <div className="metric-icon">💰</div>
+          <div className="metric-icon">
+            <DollarSign size={24} />
+          </div>
           <div className="metric-content">
             <div className="metric-label">Total Spend</div>
             <div className="metric-value">{formatCurrency(stats.totalSpend)}</div>
@@ -102,7 +122,9 @@ export default function Dashboard() {
         </div>
 
         <div className="metric-card highlight">
-          <div className="metric-icon">💵</div>
+          <div className="metric-icon">
+            <TrendingUp size={24} />
+          </div>
           <div className="metric-content">
             <div className="metric-label">Potential Savings</div>
             <div className="metric-value">{formatCurrency(stats.totalSavings)}</div>
@@ -124,7 +146,9 @@ export default function Dashboard() {
 
         {audits.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-icon">📋</div>
+            <div className="empty-icon">
+              <FileText size={48} />
+            </div>
             <h3>No audits yet</h3>
             <p>Create your first audit to start analyzing freight costs and finding savings opportunities.</p>
             <Link to="/audits/new" className="btn-primary">

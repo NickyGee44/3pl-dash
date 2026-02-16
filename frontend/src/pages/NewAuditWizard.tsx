@@ -331,7 +331,7 @@ export default function NewAuditWizard() {
       )}
 
       <div className="wizard-steps">
-        <div className={`step ${step === 'customer' ? 'active' : step !== 'customer' ? 'completed' : ''}`}>
+        <div className={`step ${step === 'customer' ? 'active' : ['files', 'mappings', 'processing'].includes(step) ? 'completed' : ''}`}>
           <span className="step-number">1</span>
           <span className="step-label">Basic Info</span>
         </div>

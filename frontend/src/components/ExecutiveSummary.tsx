@@ -55,7 +55,7 @@ export default function ExecutiveSummary({ audit, lanes, exceptions }: Executive
 
   const dcChartData = Object.entries(spendByDC).map(([name, value]) => ({
     name,
-    value: Math.round(value),
+    value: Math.round(value as number),
   }))
 
   return (
@@ -131,7 +131,7 @@ export default function ExecutiveSummary({ audit, lanes, exceptions }: Executive
                     fill="#8884d8"
                     dataKey="value"
                   >
-                    {dcChartData.map((entry, index) => (
+                    {dcChartData.map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
