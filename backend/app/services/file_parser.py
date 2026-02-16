@@ -52,43 +52,55 @@ COLUMN_PATTERNS = {
     "origin_city": [
         "shpcity", "shcity", "s.city", "shipper city", "shipper_city",
         "origin", "origin_city", "from_city", "ship_from_city", "scity",
+        "sh_city", "shippercity", "shipfromcity", "shipcity",
     ],
     "origin_province": [
         "shpst", "shstate", "shprv", "shp prov", "shp_prov", "sprov",
         "origin_prov", "from_prov", "ship_from_prov", "origin_province",
-        "shipper_province", "shipper province",
+        "shipper_province", "shipper province", "sh_prov", "shprov",
     ],
     "origin_postal": [
         "shppc", "shpcode", "shp postal", "shp_zip", "szip", "spostal",
         "origin_postal", "from_postal", "ship_from_postal", "origin_zip",
-        "shpostal", "sh postal", "shipper postal",
+        "shpostal", "sh postal", "shipper postal", "sh_postal", "shzip",
     ],
     "origin_name": [
         "shname", "shipper name", "shpname", "shipper_name", "sname",
+        "shipper", "sender", "shipperid", "shipper_no",
     ],
     "origin_address": [
         "shadd1", "shp add1", "shipper address", "shipper_address", "saddr",
+        "shaddr", "sh_address", "shstrno", "sh_street",
     ],
     # Destination fields (consignee)
     "dest_city": [
         "cnpcity", "cncity", "ccity", "dcity", "destcity", "ccityname",
         "dest", "destination", "dest_city", "to_city", "ship_to_city",
-        "consignee_city", "consignee city",
+        "consignee_city", "consignee city", "rccity", "rc_city",
+        "receiver_city", "receivercity", "rcvcity",
     ],
     "dest_province": [
         "cnpst", "cprov", "cstate", "destprov", "c_prov", "dprov",
         "dest_prov", "to_prov", "ship_to_prov", "dest_province", "province",
-        "consignee_province", "consignee province",
+        "consignee_province", "consignee province", "rcprov", "rc_prov",
+        "rcstate", "rc_st", "receiver_province",
     ],
     "dest_postal": [
         "cnppc", "cpostal", "cpc", "czip", "destpostal", "dzip",
         "dest_postal", "to_postal", "ship_to_postal", "dest_zip", "postal",
+        "rcpostal", "rc_postal", "rczip", "receiver_postal",
+    ],
+    "dest_country": [
+        "dest_country", "destination country", "country", "consignee_country",
+        "receiver_country", "rccountry", "rc_country", "cncountry",
     ],
     "dest_name": [
         "cnname", "consignee name", "cname", "consignee_name", "dname",
+        "rcname", "receiver_name", "receivername", "receiver",
     ],
     "dest_address": [
         "cnadd1", "cadd1", "dest address", "consignee_address", "daddr",
+        "rcadd1", "rc_address", "rcaddr", "rcstrno", "receiver_address",
     ],
     # Dates
     "ship_date": [
@@ -135,6 +147,7 @@ TARGET_FIELD_DESCRIPTIONS: Dict[str, str] = {
     "dest_city": "Consignee destination city.",
     "dest_province": "Consignee destination province/state.",
     "dest_postal": "Consignee destination postal/zip code.",
+    "dest_country": "Consignee destination country.",
     "dest_name": "Consignee name.",
     "dest_address": "Consignee address line.",
     "dest_region": "Destination region grouping (derived from province).",
@@ -223,6 +236,90 @@ def _build_column_samples(df: pd.DataFrame, max_values: int = 3) -> Dict[str, Li
         if values:
             samples[str(col)] = values
     return samples
+
+
+def _infer_role_based_target(column_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Infer mappings from common carrier abbreviations:
+    - RC_* => receiver/consignee (destination)
+    - SH_* => shipper/origin
+    """
+    norm = _normalize_token(column_name)
+    if not norm:
+        return None
+    tokens = _token_set(column_name)
+
+    is_receiver = (
+        norm.startswith("rc")
+        or "receiver" in tokens
+        or "consignee" in tokens
+        or norm.startswith("cn")
+    )
+    is_shipper = (
+        norm.startswith("sh")
+        or "shipper" in tokens
+        or "sender" in tokens
+        or "origin" in tokens
+    )
+    if not is_receiver and not is_shipper:
+        return None
+
+    target_prefix = "dest" if is_receiver else "origin"
+
+    def has(*candidates: str) -> bool:
+        return any(candidate in tokens for candidate in candidates) or any(
+            candidate in norm for candidate in candidates
+        )
+
+    if has("city"):
+        return {
+            "target_field": f"{target_prefix}_city",
+            "confidence": 0.96,
+            "reason": f"{'Receiver' if is_receiver else 'Shipper'} city pattern.",
+        }
+    if has("province", "prov", "state"):
+        return {
+            "target_field": f"{target_prefix}_province",
+            "confidence": 0.93,
+            "reason": f"{'Receiver' if is_receiver else 'Shipper'} province/state pattern.",
+        }
+    if has("postal", "zip", "pc"):
+        return {
+            "target_field": f"{target_prefix}_postal",
+            "confidence": 0.92,
+            "reason": f"{'Receiver' if is_receiver else 'Shipper'} postal/zip pattern.",
+        }
+    if is_receiver and has("country", "cntry", "ctry"):
+        return {
+            "target_field": "dest_country",
+            "confidence": 0.92,
+            "reason": "Receiver country pattern.",
+        }
+    if has("name"):
+        return {
+            "target_field": f"{target_prefix}_name",
+            "confidence": 0.85,
+            "reason": f"{'Receiver' if is_receiver else 'Shipper'} name pattern.",
+        }
+    if has("addr", "address", "street", "line", "strno"):
+        return {
+            "target_field": f"{target_prefix}_address",
+            "confidence": 0.78,
+            "reason": f"{'Receiver' if is_receiver else 'Shipper'} address pattern.",
+        }
+    if is_receiver and norm in {"rc", "receiver"}:
+        return {
+            "target_field": "dest_name",
+            "confidence": 0.62,
+            "reason": "Receiver identifier likely destination name.",
+        }
+    if is_shipper and norm in {"sh", "shipper", "sender"}:
+        return {
+            "target_field": "origin_name",
+            "confidence": 0.62,
+            "reason": "Shipper identifier likely origin name.",
+        }
+    return None
 
 
 def _get_openai_client() -> Optional[OpenAI]:
@@ -377,9 +474,45 @@ def read_file(file_path: str, file_type: str) -> pd.DataFrame:
             return pd.concat(dataframes, ignore_index=True)
         raise ValueError("No data found in Excel file")
     elif file_type == "csv":
-        # Try different encodings
+        # Try different encodings + detect shifted header rows.
+        expected_header_tokens = {
+            "shipmentref",
+            "pronumber",
+            "shipdate",
+            "origincity",
+            "destcity",
+            "province",
+            "postal",
+            "weight",
+            "charge",
+            "trfamt",
+            "invwgt",
+            "prbwgt",
+            "shcity",
+            "cnpcity",
+            "rccity",
+            "rcprov",
+            "rcpostal",
+        }
         for encoding in ["utf-8", "latin-1", "cp1252"]:
             try:
+                preview = pd.read_csv(file_path, encoding=encoding, header=None, nrows=8)
+                best_header_idx = 0
+                best_score = -1
+                for idx in range(len(preview.index)):
+                    row_values = preview.iloc[idx].tolist()
+                    row_tokens = {
+                        _normalize_token(value)
+                        for value in row_values
+                        if pd.notna(value) and _normalize_token(value)
+                    }
+                    score = len(row_tokens.intersection(expected_header_tokens))
+                    if score > best_score:
+                        best_score = score
+                        best_header_idx = idx
+
+                if best_score >= 2 and best_header_idx > 0:
+                    return pd.read_csv(file_path, encoding=encoding, header=best_header_idx)
                 return pd.read_csv(file_path, encoding=encoding)
             except UnicodeDecodeError:
                 continue
@@ -463,6 +596,36 @@ def infer_column_mapping_detailed(
                 }
 
     # 2) Deterministic pattern mapping for targets not already mapped by config.
+    for source_column in column_order:
+        detail = details_by_column[source_column]
+        if detail.get("target_field"):
+            continue
+        semantic = _infer_role_based_target(source_column)
+        if not semantic:
+            continue
+        target_field = str(semantic.get("target_field") or "")
+        if not target_field:
+            continue
+        if target_field in target_owner:
+            continue
+        confidence = float(semantic.get("confidence") or 0.0)
+        detail.update(
+            {
+                "target_field": target_field,
+                "confidence": confidence,
+                "needs_review": confidence < 1.0,
+                "method": "pattern",
+                "reason": str(semantic.get("reason") or "Semantic prefix mapping."),
+            }
+        )
+        target_owner[target_field] = source_column
+        deterministic_suggestions[source_column] = {
+            "target_field": target_field,
+            "confidence": confidence,
+            "reason": str(semantic.get("reason") or "Semantic prefix mapping"),
+        }
+
+    # 3) Deterministic pattern mapping for targets not already mapped by config.
     for target_field, patterns in COLUMN_PATTERNS.items():
         if target_field in target_owner:
             continue
@@ -497,7 +660,7 @@ def infer_column_mapping_detailed(
                 "reason": f"Pattern '{best_pattern}'",
             }
 
-    # 3) AI pass for semantic mapping and confidence scoring.
+    # 4) AI pass for semantic mapping and confidence scoring.
     should_call_ai = any(
         (not details_by_column[col]["target_field"]) or details_by_column[col]["confidence"] < 1.0
         for col in column_order

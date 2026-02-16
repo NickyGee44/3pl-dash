@@ -240,6 +240,15 @@
   font-weight: 600;
 }
 
+.mapping-empty {
+  padding: 0.9rem 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #374151;
+  font-size: 0.9rem;
+}
+
 .mappings-table {
   width: 100%;
   border-collapse: collapse;

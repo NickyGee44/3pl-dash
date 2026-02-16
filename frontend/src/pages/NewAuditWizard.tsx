@@ -40,6 +40,7 @@ const normalizedFieldOptions = [
   { value: 'dest_city', label: 'Destination City' },
   { value: 'dest_province', label: 'Destination Province' },
   { value: 'dest_postal', label: 'Destination Postal' },
+  { value: 'dest_country', label: 'Destination Country' },
   { value: 'dest_name', label: 'Destination Name' },
   { value: 'dest_address', label: 'Destination Address' },
   { value: 'dest_region', label: 'Destination Region' },
@@ -558,51 +559,57 @@ export default function NewAuditWizard() {
               <p className="mapping-summary">
                 {(mappings[file.id] || []).filter((mapping) => mapping.needs_review || !mapping.target_field).length} column(s) need review
               </p>
-              <table className="mappings-table">
-                <thead>
-                  <tr>
-                    <th>Source Column</th>
-                    <th>Target Field</th>
-                    <th>Confidence</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mappings[file.id]?.map((mapping, idx) => (
-                    <tr
-                      key={idx}
-                      className={mapping.needs_review || !mapping.target_field ? 'needs-review' : 'confirmed'}
-                    >
-                      <td>
-                        <div>{mapping.source_column}</div>
-                        {mapping.reason && <div className="mapping-reason">{mapping.reason}</div>}
-                      </td>
-                      <td>
-                        <select
-                          value={mapping.target_field}
-                          onChange={(e) => handleMappingChange(file.id, idx, e.target.value)}
-                        >
-                          {normalizedFieldOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="mapping-confidence">
-                        {mapping.target_field ? `${Math.round((mapping.confidence || 0) * 100)}%` : '—'}
-                      </td>
-                      <td>
-                        <span
-                          className={`mapping-status ${mapping.needs_review || !mapping.target_field ? 'review' : 'ok'}`}
-                        >
-                          {mapping.needs_review || !mapping.target_field ? 'Needs review' : 'Confirmed'}
-                        </span>
-                      </td>
+              {(mappings[file.id] || []).length === 0 ? (
+                <div className="mapping-empty">
+                  No columns were detected for this tab. It may be a summary/analysis tab rather than row-level shipment data.
+                </div>
+              ) : (
+                <table className="mappings-table">
+                  <thead>
+                    <tr>
+                      <th>Source Column</th>
+                      <th>Target Field</th>
+                      <th>Confidence</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {mappings[file.id]?.map((mapping, idx) => (
+                      <tr
+                        key={idx}
+                        className={mapping.needs_review || !mapping.target_field ? 'needs-review' : 'confirmed'}
+                      >
+                        <td>
+                          <div>{mapping.source_column}</div>
+                          {mapping.reason && <div className="mapping-reason">{mapping.reason}</div>}
+                        </td>
+                        <td>
+                          <select
+                            value={mapping.target_field}
+                            onChange={(e) => handleMappingChange(file.id, idx, e.target.value)}
+                          >
+                            {normalizedFieldOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="mapping-confidence">
+                          {mapping.target_field ? `${Math.round((mapping.confidence || 0) * 100)}%` : '—'}
+                        </td>
+                        <td>
+                          <span
+                            className={`mapping-status ${mapping.needs_review || !mapping.target_field ? 'review' : 'ok'}`}
+                          >
+                            {mapping.needs_review || !mapping.target_field ? 'Needs review' : 'Confirmed'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           ))}
 
