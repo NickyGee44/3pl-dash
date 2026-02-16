@@ -51,6 +51,8 @@ export interface SourceFile {
   inferred_source_type?: string
   created_at: string
   inferred_mappings?: Record<string, string>
+  inferred_mapping_details?: ColumnMapping[]
+  low_confidence_columns?: string[]
   columns?: string[]
 }
 
@@ -58,6 +60,9 @@ export interface ColumnMapping {
   source_column: string
   target_field: string
   confidence?: number
+  needs_review?: boolean
+  method?: string
+  reason?: string
 }
 
 export interface LaneStat {
@@ -173,4 +178,3 @@ export interface AuditReportContext {
   }
   generated_at: string
 }
-

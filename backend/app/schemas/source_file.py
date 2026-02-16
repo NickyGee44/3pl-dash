@@ -12,6 +12,9 @@ class ColumnMapping(BaseModel):
     source_column: str
     target_field: str  # e.g., "weight", "pallets", "actual_charge"
     confidence: Optional[float] = None  # 0-1, for inferred mappings
+    needs_review: Optional[bool] = None
+    method: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class FileMappingRequest(BaseModel):
@@ -28,9 +31,10 @@ class SourceFileResponse(BaseModel):
     inferred_source_type: Optional[str] = None
     created_at: datetime
     inferred_mappings: Optional[Dict[str, str]] = None  # Proposed column mappings
+    inferred_mapping_details: Optional[List[ColumnMapping]] = None
+    low_confidence_columns: Optional[List[str]] = None
     columns: Optional[List[str]] = None
 
     class Config:
         from_attributes = True
-
 

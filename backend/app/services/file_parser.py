@@ -1,15 +1,22 @@
 """
 File parsing and column mapping services.
 """
-import pandas as pd
+import json
+import logging
 import os
-from typing import Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List, Optional
 from pathlib import Path
+
+import pandas as pd
+from openai import OpenAI
 
 from app.config.mapping_loader import (
     get_region_from_config,
     get_shipment_mapping_for_file,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Known column name patterns for mapping (case-insensitive matching)
@@ -117,6 +124,232 @@ COLUMN_PATTERNS = {
     ],
 }
 
+TARGET_FIELD_DESCRIPTIONS: Dict[str, str] = {
+    "shipment_ref": "Shipment reference identifier (PRO/BOL/tracking).",
+    "origin_dc": "Origin distribution center code.",
+    "origin_city": "Shipper origin city.",
+    "origin_province": "Shipper origin province/state.",
+    "origin_postal": "Shipper origin postal/zip code.",
+    "origin_name": "Shipper company/location name.",
+    "origin_address": "Shipper address line.",
+    "dest_city": "Consignee destination city.",
+    "dest_province": "Consignee destination province/state.",
+    "dest_postal": "Consignee destination postal/zip code.",
+    "dest_name": "Consignee name.",
+    "dest_address": "Consignee address line.",
+    "dest_region": "Destination region grouping (derived from province).",
+    "ship_date": "Shipment date.",
+    "pallets": "Pallet/skid/piece count.",
+    "weight": "Actual/scale shipment weight.",
+    "billed_weight": "Carrier-rated or billed weight.",
+    "dim_weight": "Dimensional/cube weight.",
+    "charge": "Actual freight charge amount.",
+    "carrier": "Carrier name/scac.",
+    "customer_ref": "Customer reference identifier.",
+    "std_transit_days": "Standard transit days.",
+    "actual_transit_days": "Actual transit days.",
+    "pod_signed": "Proof of delivery signature present flag.",
+    "pod_signature": "Proof of delivery signer/signature text.",
+}
+
+PATTERN_MATCH_MIN_CONFIDENCE = 0.55
+AI_MATCH_MIN_CONFIDENCE = 0.55
+AI_DEFAULT_MODEL = os.getenv("COLUMN_MAPPING_MODEL", "gpt-4o-mini")
+_OPENAI_CLIENT: Any = None
+
+
+def _normalize_token(value: Any) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def _token_set(value: Any) -> set[str]:
+    return {token for token in re.split(r"[^a-z0-9]+", str(value).lower()) if token}
+
+
+def _is_meta_column(column_name: Any) -> bool:
+    return str(column_name).startswith("__")
+
+
+def _resolve_source_column(df_columns: List[Any], configured_name: Any) -> Optional[Any]:
+    """Resolve configured column names against real columns case/format-insensitively."""
+    target_norm = _normalize_token(configured_name)
+    if not target_norm:
+        return None
+    for col in df_columns:
+        if _normalize_token(col) == target_norm:
+            return col
+    return None
+
+
+def _score_pattern_match(column_name: str, pattern: str) -> float:
+    col_norm = _normalize_token(column_name)
+    pat_norm = _normalize_token(pattern)
+    if not col_norm or not pat_norm:
+        return 0.0
+    if col_norm == pat_norm:
+        return 1.0
+    if col_norm.startswith(pat_norm) or col_norm.endswith(pat_norm):
+        return 0.92
+    if pat_norm in col_norm:
+        return 0.82
+    col_tokens = _token_set(column_name)
+    pat_tokens = _token_set(pattern)
+    if not col_tokens or not pat_tokens:
+        return 0.0
+    overlap = len(col_tokens.intersection(pat_tokens))
+    if overlap == 0:
+        return 0.0
+    return min(0.8, overlap / max(len(col_tokens), len(pat_tokens)))
+
+
+def _build_column_samples(df: pd.DataFrame, max_values: int = 3) -> Dict[str, List[str]]:
+    samples: Dict[str, List[str]] = {}
+    for col in df.columns:
+        if _is_meta_column(col):
+            continue
+        values: List[str] = []
+        series = df[col]
+        for val in series:
+            if pd.isna(val):
+                continue
+            text = str(val).strip()
+            if not text:
+                continue
+            values.append(text[:80])
+            if len(values) >= max_values:
+                break
+        if values:
+            samples[str(col)] = values
+    return samples
+
+
+def _get_openai_client() -> Optional[OpenAI]:
+    global _OPENAI_CLIENT
+    if _OPENAI_CLIENT is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            _OPENAI_CLIENT = False
+        else:
+            try:
+                _OPENAI_CLIENT = OpenAI(api_key=api_key)
+            except Exception as exc:
+                logger.warning("Failed to initialize OpenAI client for mapping: %s", exc)
+                _OPENAI_CLIENT = False
+    return _OPENAI_CLIENT if _OPENAI_CLIENT is not False else None
+
+
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    if not text:
+        return None
+    payload = text.strip()
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        pass
+
+    start = payload.find("{")
+    end = payload.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(payload[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def _infer_mappings_with_ai(
+    *,
+    columns: List[str],
+    column_samples: Dict[str, List[str]],
+    deterministic_suggestions: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Ask the LLM for semantic column mapping suggestions with confidence.
+    Returns normalized suggestions list; failures return [].
+    """
+    client = _get_openai_client()
+    if not client or not columns:
+        return []
+
+    prompt = {
+        "task": "Map shipment source columns to canonical fields",
+        "allowed_target_fields": TARGET_FIELD_DESCRIPTIONS,
+        "source_columns": columns,
+        "column_samples": column_samples,
+        "deterministic_suggestions": deterministic_suggestions,
+        "rules": [
+            "Return strict JSON only.",
+            "Use target_field empty string if unknown.",
+            "confidence is float 0.0-1.0.",
+            "Set confidence=1.0 only when mapping is unambiguous.",
+            "Prefer deterministic suggestions when they are clearly correct.",
+        ],
+        "response_schema": {
+            "mappings": [
+                {
+                    "source_column": "string",
+                    "target_field": "string",
+                    "confidence": "float",
+                    "reason": "string",
+                }
+            ]
+        },
+    }
+
+    try:
+        response = client.chat.completions.create(
+            model=AI_DEFAULT_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a logistics data mapping assistant that outputs strict JSON only.",
+                },
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+            temperature=0,
+            max_tokens=900,
+        )
+        content = response.choices[0].message.content if response.choices else ""
+        payload = _extract_json_object(content or "")
+        if not payload:
+            return []
+        suggestions = payload.get("mappings")
+        if not isinstance(suggestions, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        allowed_targets = set(TARGET_FIELD_DESCRIPTIONS.keys())
+        allowed_targets.add("")
+        for item in suggestions:
+            if not isinstance(item, dict):
+                continue
+            source_column = str(item.get("source_column", "")).strip()
+            if source_column not in columns:
+                continue
+            target_field = str(item.get("target_field", "")).strip()
+            if target_field not in allowed_targets:
+                target_field = ""
+            try:
+                confidence = float(item.get("confidence", 0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
+            reason = str(item.get("reason", "")).strip()
+            normalized.append(
+                {
+                    "source_column": source_column,
+                    "target_field": target_field,
+                    "confidence": confidence,
+                    "reason": reason,
+                }
+            )
+        return normalized
+    except Exception as exc:
+        logger.warning("AI mapping inference failed: %s", exc)
+        return []
+
 
 def infer_file_type(filename: str) -> str:
     """Infer file type from extension."""
@@ -155,57 +388,220 @@ def read_file(file_path: str, file_type: str) -> pd.DataFrame:
         raise ValueError(f"Unsupported file type: {file_type}")
 
 
-def infer_column_mapping(df: pd.DataFrame, filename: Optional[str] = None, sheet_name: Optional[str] = None) -> Dict[str, str]:
+def infer_column_mapping_detailed(
+    df: pd.DataFrame,
+    filename: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
-    Infer column mappings from DataFrame column names.
-    Returns dict mapping source_column -> target_field.
-    
-    Priority:
-    1. Config file explicit mapping (if filename matches)
-    2. Pattern-based inference from COLUMN_PATTERNS
+    Infer column mappings with metadata for review workflows.
+
+    Returns one detail row per source column:
+      - source_column
+      - target_field
+      - confidence
+      - needs_review
+      - method (config|pattern|ai|unmapped)
+      - reason
     """
-    mappings = {}
-    
-    # First, try config-based mapping
+    column_order: List[str] = []
+    details_by_column: Dict[str, Dict[str, Any]] = {}
+    for col in df.columns:
+        if _is_meta_column(col):
+            continue
+        col_name = str(col)
+        column_order.append(col_name)
+        details_by_column[col_name] = {
+            "source_column": col_name,
+            "target_field": "",
+            "confidence": 0.0,
+            "needs_review": True,
+            "method": "unmapped",
+            "reason": "No mapping inferred.",
+        }
+
+    if not column_order:
+        return []
+
+    target_owner: Dict[str, str] = {}
+    deterministic_suggestions: Dict[str, Dict[str, Any]] = {}
+
+    # 1) Config mappings are authoritative and treated as fully trusted.
     if filename:
         config_mapping = get_shipment_mapping_for_file(filename, sheet_name)
         if config_mapping and config_mapping.get("columns"):
-            mappings = dict(config_mapping["columns"])
-    
-    # Then, augment with pattern-based inference for any unmapped columns
-    df_columns = [str(col).lower().strip() for col in df.columns]
-    already_mapped_targets = set(mappings.values())
-    
-    for target_field, patterns in COLUMN_PATTERNS.items():
-        if target_field in already_mapped_targets:
-            continue  # Already have a mapping from config
-        
-        best_match = None
-        best_score = 0
-        
-        for col_idx, col_name in enumerate(df_columns):
-            original_col = df.columns[col_idx]
-            if original_col in mappings:
-                continue  # This source column is already mapped
-            
-            for pattern in patterns:
-                if pattern == col_name:
-                    # Exact match
-                    score = 1.0
-                elif pattern in col_name:
-                    # Contains match
-                    score = 0.5
-                else:
+            for configured_source, target_field in config_mapping["columns"].items():
+                if not target_field:
                     continue
-                
+                resolved = _resolve_source_column(list(df.columns), configured_source)
+                if resolved is None or _is_meta_column(resolved):
+                    continue
+                source_column = str(resolved)
+                if source_column not in details_by_column:
+                    continue
+                # Keep one owner per target field; avoid duplicate auto-maps for same target.
+                existing_owner = target_owner.get(target_field)
+                if existing_owner and existing_owner != source_column:
+                    existing_detail = details_by_column.get(existing_owner)
+                    if existing_detail and existing_detail.get("method") == "config":
+                        continue
+
+                details_by_column[source_column].update(
+                    {
+                        "target_field": target_field,
+                        "confidence": 1.0,
+                        "needs_review": False,
+                        "method": "config",
+                        "reason": f"Mapped from config '{configured_source}'.",
+                    }
+                )
+                target_owner[target_field] = source_column
+                deterministic_suggestions[source_column] = {
+                    "target_field": target_field,
+                    "confidence": 1.0,
+                    "reason": "Configuration mapping",
+                }
+
+    # 2) Deterministic pattern mapping for targets not already mapped by config.
+    for target_field, patterns in COLUMN_PATTERNS.items():
+        if target_field in target_owner:
+            continue
+        best_source: Optional[str] = None
+        best_pattern: Optional[str] = None
+        best_score = 0.0
+        for source_column in column_order:
+            detail = details_by_column[source_column]
+            if detail.get("target_field"):
+                continue
+            for pattern in patterns:
+                score = _score_pattern_match(source_column, pattern)
                 if score > best_score:
                     best_score = score
-                    best_match = original_col
-        
-        if best_match:
-            mappings[best_match] = target_field
-    
-    return mappings
+                    best_source = source_column
+                    best_pattern = pattern
+
+        if best_source and best_score >= PATTERN_MATCH_MIN_CONFIDENCE:
+            details_by_column[best_source].update(
+                {
+                    "target_field": target_field,
+                    "confidence": best_score,
+                    "needs_review": best_score < 1.0,
+                    "method": "pattern",
+                    "reason": f"Pattern match '{best_pattern}' ({best_score:.2f}).",
+                }
+            )
+            target_owner[target_field] = best_source
+            deterministic_suggestions[best_source] = {
+                "target_field": target_field,
+                "confidence": best_score,
+                "reason": f"Pattern '{best_pattern}'",
+            }
+
+    # 3) AI pass for semantic mapping and confidence scoring.
+    should_call_ai = any(
+        (not details_by_column[col]["target_field"]) or details_by_column[col]["confidence"] < 1.0
+        for col in column_order
+    )
+    if should_call_ai:
+        ai_suggestions = _infer_mappings_with_ai(
+            columns=column_order,
+            column_samples=_build_column_samples(df),
+            deterministic_suggestions=deterministic_suggestions,
+        )
+        ai_suggestions.sort(key=lambda item: float(item.get("confidence", 0.0)), reverse=True)
+
+        for suggestion in ai_suggestions:
+            source_column = str(suggestion.get("source_column", ""))
+            target_field = str(suggestion.get("target_field", ""))
+            confidence = float(suggestion.get("confidence", 0.0))
+            reason = str(suggestion.get("reason", "")).strip()
+
+            if (
+                not source_column
+                or source_column not in details_by_column
+                or not target_field
+                or confidence < AI_MATCH_MIN_CONFIDENCE
+            ):
+                continue
+
+            detail = details_by_column[source_column]
+            if detail.get("method") == "config":
+                continue
+
+            current_target = str(detail.get("target_field") or "")
+            current_conf = float(detail.get("confidence") or 0.0)
+
+            should_apply = False
+            if not current_target:
+                should_apply = True
+            elif current_target == target_field and confidence > current_conf:
+                should_apply = True
+            elif confidence >= current_conf + 0.08:
+                should_apply = True
+
+            if not should_apply:
+                continue
+
+            existing_owner = target_owner.get(target_field)
+            if existing_owner and existing_owner != source_column:
+                existing_detail = details_by_column.get(existing_owner)
+                if existing_detail:
+                    if existing_detail.get("method") == "config":
+                        continue
+                    existing_conf = float(existing_detail.get("confidence") or 0.0)
+                    if confidence <= existing_conf + 0.02:
+                        continue
+                    existing_detail.update(
+                        {
+                            "target_field": "",
+                            "confidence": 0.0,
+                            "needs_review": True,
+                            "method": "unmapped",
+                            "reason": f"Replaced by stronger AI match for '{target_field}'.",
+                        }
+                    )
+
+            if current_target and target_owner.get(current_target) == source_column and current_target != target_field:
+                target_owner.pop(current_target, None)
+
+            detail.update(
+                {
+                    "target_field": target_field,
+                    "confidence": confidence,
+                    "needs_review": confidence < 1.0,
+                    "method": "ai",
+                    "reason": reason or "AI semantic mapping.",
+                }
+            )
+            target_owner[target_field] = source_column
+
+    # Normalize confidence precision + review flag consistency.
+    result: List[Dict[str, Any]] = []
+    for source_column in column_order:
+        detail = details_by_column[source_column]
+        confidence = max(0.0, min(1.0, float(detail.get("confidence") or 0.0)))
+        detail["confidence"] = round(confidence, 3)
+        detail["needs_review"] = (not detail.get("target_field")) or confidence < 1.0
+        result.append(detail)
+
+    return result
+
+
+def infer_column_mapping(
+    df: pd.DataFrame,
+    filename: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Backward-compatible mapping API.
+    Returns dict mapping source_column -> target_field.
+    """
+    detailed = infer_column_mapping_detailed(df, filename, sheet_name)
+    return {
+        item["source_column"]: item["target_field"]
+        for item in detailed
+        if item.get("target_field")
+    }
 
 
 def infer_source_type(filename: str) -> Optional[str]:
@@ -228,5 +624,3 @@ def infer_source_type(filename: str) -> Optional[str]:
 def normalize_province_to_region(province: str) -> Optional[str]:
     """Map province to region."""
     return get_region_from_config(province)
-
-

@@ -175,6 +175,10 @@ export default function NewAuditWizard() {
         existing[index] = {
           ...existing[index],
           target_field: value,
+          confidence: value ? 1 : 0,
+          needs_review: !value,
+          method: value ? 'manual' : 'unmapped',
+          reason: value ? 'Manually confirmed in review.' : 'No mapping selected.',
         }
       }
       return {
@@ -265,10 +269,28 @@ export default function NewAuditWizard() {
       try {
         const response = await api.get<SourceFile>(`/files/${file.id}/mappings`)
         const inferred = response.data.inferred_mappings || {}
-        const columns = response.data.columns || Object.keys(inferred)
+        const details = response.data.inferred_mapping_details || []
+        const detailByColumn = new Map(details.map((detail) => [detail.source_column, detail]))
+        const columns =
+          response.data.columns && response.data.columns.length > 0
+            ? response.data.columns
+            : details.length > 0
+              ? details.map((detail) => detail.source_column)
+              : Object.keys(inferred)
+
         newMappings[file.id] = columns.map((column) => ({
           source_column: column,
-          target_field: inferred[column] || '',
+          target_field: detailByColumn.get(column)?.target_field || inferred[column] || '',
+          confidence:
+            detailByColumn.get(column)?.confidence ??
+            (inferred[column] ? 1 : 0),
+          needs_review:
+            detailByColumn.get(column)?.needs_review ??
+            !Boolean(detailByColumn.get(column)?.target_field || inferred[column]),
+          method:
+            detailByColumn.get(column)?.method ??
+            (inferred[column] ? 'legacy' : 'unmapped'),
+          reason: detailByColumn.get(column)?.reason,
         }))
       } catch (error) {
         console.error(`Error loading mappings for file ${file.id}:`, error)
@@ -488,21 +510,32 @@ export default function NewAuditWizard() {
 
       {step === 'mappings' && (
         <div className="wizard-content">
-          <p>Review and adjust column mappings. The system has inferred mappings based on column names.</p>
+          <p>Review and adjust column mappings. Any row marked as needing review is not fully certain and should be confirmed.</p>
           {uploadedFiles.map((file) => (
             <div key={file.id} className="mapping-section">
               <h3>{file.original_filename}</h3>
+              <p className="mapping-summary">
+                {(mappings[file.id] || []).filter((mapping) => mapping.needs_review || !mapping.target_field).length} column(s) need review
+              </p>
               <table className="mappings-table">
                 <thead>
                   <tr>
                     <th>Source Column</th>
                     <th>Target Field</th>
+                    <th>Confidence</th>
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {mappings[file.id]?.map((mapping, idx) => (
-                    <tr key={idx}>
-                      <td>{mapping.source_column}</td>
+                    <tr
+                      key={idx}
+                      className={mapping.needs_review || !mapping.target_field ? 'needs-review' : 'confirmed'}
+                    >
+                      <td>
+                        <div>{mapping.source_column}</div>
+                        {mapping.reason && <div className="mapping-reason">{mapping.reason}</div>}
+                      </td>
                       <td>
                         <select
                           value={mapping.target_field}
@@ -514,6 +547,16 @@ export default function NewAuditWizard() {
                             </option>
                           ))}
                         </select>
+                      </td>
+                      <td className="mapping-confidence">
+                        {mapping.target_field ? `${Math.round((mapping.confidence || 0) * 100)}%` : '—'}
+                      </td>
+                      <td>
+                        <span
+                          className={`mapping-status ${mapping.needs_review || !mapping.target_field ? 'review' : 'ok'}`}
+                        >
+                          {mapping.needs_review || !mapping.target_field ? 'Needs review' : 'Confirmed'}
+                        </span>
                       </td>
                     </tr>
                   ))}
@@ -539,4 +582,3 @@ export default function NewAuditWizard() {
     </div>
   )
 }
-

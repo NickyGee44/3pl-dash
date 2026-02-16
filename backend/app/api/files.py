@@ -16,7 +16,7 @@ from app.db.database import get_db, settings
 from app.models import AuditRun, SourceFile, Shipment, AuditResult
 from app.schemas.source_file import SourceFileResponse, FileMappingRequest, ColumnMapping
 from app.services.file_parser import (
-    infer_file_type, read_file, infer_column_mapping, infer_source_type
+    infer_file_type, read_file, infer_column_mapping_detailed, infer_source_type
 )
 from app.services.normalizer import normalize_row
 from app.config.mapping_loader import get_shipment_mapping_for_file
@@ -113,11 +113,20 @@ async def get_file_mappings(
         sheet_name = None
         if "__sheet_name" in df.columns and not df["__sheet_name"].isna().all():
             sheet_name = str(df["__sheet_name"].iloc[0])
-        mappings = infer_column_mapping(df, source_file.original_filename, sheet_name)
-        columns = [str(col) for col in df.columns]
+        mapping_details = infer_column_mapping_detailed(df, source_file.original_filename, sheet_name)
+        columns = [str(col) for col in df.columns if not str(col).startswith("__")]
         
         # Convert to dict format for response
-        inferred_mappings = {k: v for k, v in mappings.items()}
+        inferred_mappings = {
+            item["source_column"]: item["target_field"]
+            for item in mapping_details
+            if item.get("target_field")
+        }
+        low_confidence_columns = [
+            item["source_column"]
+            for item in mapping_details
+            if item.get("needs_review")
+        ]
         
         # Create response with inferred mappings
         response = SourceFileResponse(
@@ -128,6 +137,8 @@ async def get_file_mappings(
             inferred_source_type=source_file.inferred_source_type,
             created_at=source_file.created_at,
             inferred_mappings=inferred_mappings,
+            inferred_mapping_details=[ColumnMapping(**item) for item in mapping_details],
+            low_confidence_columns=low_confidence_columns,
             columns=columns,
         )
         return response

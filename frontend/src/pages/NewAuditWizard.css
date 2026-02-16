@@ -232,6 +232,14 @@
   font-size: 1.1rem;
 }
 
+.mapping-summary {
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: #b45309;
+  font-weight: 600;
+}
+
 .mappings-table {
   width: 100%;
   border-collapse: collapse;
@@ -250,11 +258,49 @@
   font-weight: 600;
 }
 
+.mappings-table tr.needs-review {
+  background-color: #fff7ed;
+}
+
+.mappings-table tr.confirmed {
+  background-color: #f0fdf4;
+}
+
 .mappings-table select {
   width: 100%;
   padding: 0.5rem;
   border-radius: 6px;
   border: 1px solid #ccc;
+}
+
+.mapping-reason {
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.mapping-confidence {
+  width: 90px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mapping-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+}
+
+.mapping-status.review {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.mapping-status.ok {
+  color: #166534;
+  background: #dcfce7;
 }
 
 .processing-message {
@@ -302,4 +348,3 @@
   cursor: not-allowed;
   transform: none;
 }
-
