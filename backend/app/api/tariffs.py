@@ -8,7 +8,7 @@ from uuid import UUID
 import os
 from pathlib import Path
 from app.db.database import get_db, settings
-from app.models import Tariff, TariffLane
+from app.models import Tariff, TariffLane, TariffBreak
 from app.schemas.tariff import TariffResponse, TariffCreate
 from app.services.tariff_cache import get_tariff_cache
 from app.services.tariff_ingestion import (
@@ -61,14 +61,34 @@ async def ingest_tariff_file(
         # Call appropriate ingestion function
         ingestion_func = TARIFF_INGESTION_MAP[carrier_name]
         tariff = ingestion_func(str(file_path), db)
+        lane_count = db.query(TariffLane).filter(TariffLane.tariff_id == tariff.id).count()
+        break_count = (
+            db.query(TariffBreak)
+            .join(TariffLane, TariffBreak.tariff_lane_id == TariffLane.id)
+            .filter(TariffLane.tariff_id == tariff.id)
+            .count()
+        )
+
+        if lane_count == 0 or break_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Ingestion produced lane_count={lane_count}, break_count={break_count}. "
+                    "Template/column mapping likely mismatched. Please verify sheet/header configuration."
+                ),
+            )
         
         return {
             "message": f"Tariff ingested successfully for {carrier_name}",
             "tariff_id": str(tariff.id),
             "carrier_name": tariff.carrier_name,
             "origin_dc": tariff.origin_dc,
-            "tariff_type": tariff.tariff_type.value
+            "tariff_type": tariff.tariff_type.value,
+            "lane_count": lane_count,
+            "break_count": break_count,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -131,4 +151,3 @@ async def refresh_tariff_cache(
     """Force refresh the in-memory tariff cache."""
     get_tariff_cache(db, force_reload=True)
     return {"message": "Tariff cache refreshed"}
-

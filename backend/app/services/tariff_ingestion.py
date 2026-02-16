@@ -171,6 +171,10 @@ def parse_apps_tariff(file_path: str, db: Session) -> Tariff:
         )
         db.add(tariff)
         db.flush()
+    else:
+        # Rebuild tariff from latest upload to avoid stale lanes/breaks lingering.
+        db.query(TariffLane).filter(TariffLane.tariff_id == tariff.id).delete(synchronize_session=False)
+        db.flush()
     
     # Find numeric columns (spot counts)
     requested_spots = config.get("spot_columns")
@@ -269,6 +273,10 @@ def parse_cwt_tariff(
             tariff_type=TariffType.CWT
         )
         db.add(tariff)
+        db.flush()
+    else:
+        # Rebuild tariff from latest upload to avoid stale lanes/breaks lingering.
+        db.query(TariffLane).filter(TariffLane.tariff_id == tariff.id).delete(synchronize_session=False)
         db.flush()
     
     # Auto-detect break columns if not provided
