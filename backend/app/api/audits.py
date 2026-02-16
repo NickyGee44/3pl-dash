@@ -3,11 +3,11 @@ Audit Run API endpoints.
 """
 import logging
 import traceback
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
-from app.db.database import get_db
+from app.db.database import get_db, SessionLocal
 from app.models import Customer, AuditRun
 from app.schemas.audit_run import (
     AuditRunCreate,
@@ -21,6 +21,23 @@ from app.services.llm_reports import answer_audit_question
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _run_audit_background(audit_run_id: UUID) -> None:
+    """
+    Execute audit processing in a background task to avoid request timeouts.
+    """
+    db = SessionLocal()
+    try:
+        run_audit(db, audit_run_id)
+    except Exception:
+        logger.exception("Background audit run failed for %s", audit_run_id)
+        audit_run = db.query(AuditRun).filter(AuditRun.id == audit_run_id).first()
+        if audit_run:
+            audit_run.status = AuditRunStatus.FAILED.value
+            db.commit()
+    finally:
+        db.close()
 
 
 @router.post("/", response_model=AuditRunResponse, status_code=status.HTTP_201_CREATED)
@@ -245,15 +262,34 @@ def _get_region_breakdown(db: Session, audit_run_id: UUID) -> list:
     ]
 
 
-@router.post("/{audit_run_id}/run", status_code=status.HTTP_200_OK)
+@router.post("/{audit_run_id}/run", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_audit(
     audit_run_id: UUID,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Trigger audit computation for an audit run."""
+    """Trigger audit computation for an audit run asynchronously."""
     try:
-        summary = run_audit(db, audit_run_id)
-        return {"message": "Audit completed successfully", "summary": summary}
+        audit_run = db.query(AuditRun).filter(AuditRun.id == audit_run_id).first()
+        if not audit_run:
+            raise ValueError(f"Audit run {audit_run_id} not found")
+
+        if audit_run.status == AuditRunStatus.PROCESSING.value:
+            return {
+                "message": "Audit is already processing",
+                "audit_run_id": str(audit_run_id),
+                "status": audit_run.status,
+            }
+
+        audit_run.status = AuditRunStatus.PROCESSING.value
+        db.commit()
+
+        background_tasks.add_task(_run_audit_background, audit_run_id)
+        return {
+            "message": "Audit started",
+            "audit_run_id": str(audit_run_id),
+            "status": AuditRunStatus.PROCESSING.value,
+        }
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -385,4 +421,3 @@ async def ask_ai_about_audit(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"AI analysis failed: {str(e)}"
         )
-
