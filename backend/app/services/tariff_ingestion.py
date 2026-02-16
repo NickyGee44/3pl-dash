@@ -15,6 +15,27 @@ from app.models.tariff import TariffType
 from app.config.mapping_loader import get_tariff_mapping_for_file
 
 
+def _clear_tariff_lanes_and_breaks(db: Session, tariff_id: Any) -> None:
+    """
+    Safely clear a tariff before re-ingest.
+
+    Bulk deletes bypass SQLAlchemy ORM cascades, so we must delete child breaks
+    before deleting parent lanes to avoid FK violations.
+    """
+    lane_ids = [
+        row[0]
+        for row in db.query(TariffLane.id).filter(TariffLane.tariff_id == tariff_id).all()
+    ]
+    if lane_ids:
+        db.query(TariffBreak).filter(TariffBreak.tariff_lane_id.in_(lane_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(TariffLane).filter(TariffLane.tariff_id == tariff_id).delete(
+        synchronize_session=False
+    )
+    db.flush()
+
+
 def _normalize_column_key(value: Any) -> str:
     """Normalize column labels for resilient matching across file variants."""
     if value is None:
@@ -189,8 +210,7 @@ def parse_apps_tariff(file_path: str, db: Session) -> Tariff:
         db.flush()
     else:
         # Rebuild tariff from latest upload to avoid stale lanes/breaks lingering.
-        db.query(TariffLane).filter(TariffLane.tariff_id == tariff.id).delete(synchronize_session=False)
-        db.flush()
+        _clear_tariff_lanes_and_breaks(db, tariff.id)
     
     # Find numeric columns (spot counts)
     requested_spots = config.get("spot_columns")
@@ -292,8 +312,7 @@ def parse_cwt_tariff(
         db.flush()
     else:
         # Rebuild tariff from latest upload to avoid stale lanes/breaks lingering.
-        db.query(TariffLane).filter(TariffLane.tariff_id == tariff.id).delete(synchronize_session=False)
-        db.flush()
+        _clear_tariff_lanes_and_breaks(db, tariff.id)
     
     # Auto-detect break columns if not provided
     if config_override.get("origin_dc"):

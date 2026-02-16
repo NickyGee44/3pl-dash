@@ -3,6 +3,7 @@ Tariff management API endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File as FastAPIFile
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from uuid import UUID
 import os
@@ -89,7 +90,23 @@ async def ingest_tariff_file(
         }
     except HTTPException:
         raise
+    except IntegrityError as e:
+        db.rollback()
+        detail = str(e.orig) if getattr(e, "orig", None) else str(e)
+        if "tariff_breaks_tariff_lane_id_fkey" in detail:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Tariff replace failed while clearing previous rows (lane/break dependency). "
+                    "This is a system re-ingest issue, not a problem with your file content."
+                ),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database integrity error while ingesting tariff. Please retry.",
+        )
     except Exception as e:
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error ingesting tariff: {str(e)}"
