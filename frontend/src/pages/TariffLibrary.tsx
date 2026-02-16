@@ -50,12 +50,18 @@ export default function TariffLibrary() {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      await api.post(`/tariffs/ingest?carrier_name=${encodeURIComponent(carrier)}`, formData, {
+      const response = await api.post(`/tariffs/ingest?carrier_name=${encodeURIComponent(carrier)}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setFile(null)
       await fetchTariffs()
-      alert(`Tariff ingested for ${carrier}`)
+      const laneCount = response.data?.lane_count
+      const breakCount = response.data?.break_count
+      if (laneCount != null && breakCount != null) {
+        alert(`Tariff ingested for ${carrier} (${laneCount} lanes, ${breakCount} breaks)`)
+      } else {
+        alert(`Tariff ingested for ${carrier}`)
+      }
     } catch (err: any) {
       console.error('Error ingesting tariff', err)
       const detail = err.response?.data?.detail || err.message
