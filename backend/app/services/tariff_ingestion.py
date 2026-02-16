@@ -38,13 +38,29 @@ def _read_excel_resilient(
     """
     expected_tokens = {_normalize_column_key(h) for h in (expected_headers or []) if _normalize_column_key(h)}
 
+    requested_sheet: Any = sheet_name if sheet_name not in (None, "") else 0
+
+    def _read_df(*, header: Any, nrows: Optional[int] = None) -> pd.DataFrame:
+        try:
+            obj = pd.read_excel(file_path, sheet_name=requested_sheet, header=header, nrows=nrows)
+        except Exception:
+            # Fallback to first sheet if configured sheet is missing/misspelled.
+            obj = pd.read_excel(file_path, sheet_name=0, header=header, nrows=nrows)
+
+        # pandas returns a dict when sheet_name=None; coerce to first DataFrame.
+        if isinstance(obj, dict):
+            if not obj:
+                raise ValueError("Uploaded Excel file has no readable sheets")
+            return next(iter(obj.values()))
+        return obj
+
     # Respect explicit config first.
     if header_row is not None:
-        df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
+        df = _read_df(header=header_row)
     else:
         candidate_header = 0
         best_score = -1
-        preview = pd.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=12)
+        preview = _read_df(header=None, nrows=12)
 
         for idx in range(len(preview.index)):
             row_values = preview.iloc[idx].tolist()
@@ -58,7 +74,7 @@ def _read_excel_resilient(
         if best_score < 2:
             candidate_header = 0
 
-        df = pd.read_excel(file_path, sheet_name=sheet_name, header=candidate_header)
+        df = _read_df(header=candidate_header)
 
     # Trim whitespace and normalize obvious oddities in header labels.
     df = df.rename(columns={col: str(col).strip() for col in df.columns})
