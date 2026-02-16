@@ -166,6 +166,7 @@ tariffs:
     origin_dc: SCARB
     tariff_type: CWT
     sheet: Sheet1
+    header_row: 1
     dest_city_column: CITY
     dest_province_column: PROV
     min_charge_column: MIN
@@ -185,8 +186,7 @@ tariffs:
     origin_dc: CGY
     tariff_type: CWT
     sheet: Sheet1
-    dest_city_column: Destination
+    dest_city_column: DESTINATION CITY
     dest_province_column: PROV
     min_charge_column: MIN
     breaks: *gg_breaks
-
