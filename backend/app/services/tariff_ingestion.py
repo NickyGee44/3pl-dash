@@ -2,6 +2,7 @@
 Tariff ingestion service - parses XLSX rate sheets into database.
 """
 import os
+import re
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,128 @@ from app.models.tariff import TariffType
 from app.config.mapping_loader import get_tariff_mapping_for_file
 
 
+def _normalize_column_key(value: Any) -> str:
+    """Normalize column labels for resilient matching across file variants."""
+    if value is None:
+        return ""
+    text = str(value).strip().upper()
+    return re.sub(r"[^A-Z0-9]+", "", text)
+
+
+def _read_excel_resilient(
+    file_path: str,
+    *,
+    sheet_name: Optional[str] = None,
+    expected_headers: Optional[List[Any]] = None,
+    header_row: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Read Excel while handling shifted header rows (common in carrier templates).
+
+    If `header_row` is not provided, scans the first few rows and chooses the row
+    that best matches expected header tokens.
+    """
+    expected_tokens = {_normalize_column_key(h) for h in (expected_headers or []) if _normalize_column_key(h)}
+
+    # Respect explicit config first.
+    if header_row is not None:
+        df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
+    else:
+        candidate_header = 0
+        best_score = -1
+        preview = pd.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=12)
+
+        for idx in range(len(preview.index)):
+            row_values = preview.iloc[idx].tolist()
+            row_tokens = {_normalize_column_key(v) for v in row_values if pd.notna(v)}
+            score = len(expected_tokens.intersection(row_tokens))
+            if score > best_score:
+                best_score = score
+                candidate_header = idx
+
+        # Avoid accidental promotion when there is weak/no signal.
+        if best_score < 2:
+            candidate_header = 0
+
+        df = pd.read_excel(file_path, sheet_name=sheet_name, header=candidate_header)
+
+    # Trim whitespace and normalize obvious oddities in header labels.
+    df = df.rename(columns={col: str(col).strip() for col in df.columns})
+    return df
+
+
+def _resolve_column_name(
+    df: pd.DataFrame,
+    primary: Optional[Any],
+    fallbacks: Optional[List[Any]] = None,
+) -> Optional[Any]:
+    """Resolve a desired column name to an actual DataFrame column label."""
+    normalized_to_actual: Dict[str, Any] = {}
+    for col in df.columns:
+        norm = _normalize_column_key(col)
+        if norm and norm not in normalized_to_actual:
+            normalized_to_actual[norm] = col
+
+    candidates: List[Any] = []
+    if primary is not None:
+        candidates.append(primary)
+    candidates.extend(fallbacks or [])
+
+    for candidate in candidates:
+        norm = _normalize_column_key(candidate)
+        if norm in normalized_to_actual:
+            return normalized_to_actual[norm]
+    return None
+
+
+def _resolve_break_columns(
+    df: pd.DataFrame,
+    break_columns: Optional[List[Any]],
+) -> List[Any]:
+    """Resolve configured break columns against actual sheet column labels."""
+    if not break_columns:
+        return []
+
+    resolved: List[Any] = []
+    for break_def in break_columns:
+        if isinstance(break_def, dict):
+            raw_col = break_def.get("column")
+            actual_col = _resolve_column_name(df, raw_col)
+            if actual_col is None:
+                continue
+            normalized_def = dict(break_def)
+            normalized_def["column"] = actual_col
+            resolved.append(normalized_def)
+        else:
+            actual_col = _resolve_column_name(df, break_def)
+            if actual_col is not None:
+                resolved.append(actual_col)
+    return resolved
+
+
+def _infer_cwt_break_columns(
+    df: pd.DataFrame,
+    *,
+    excluded_columns: Optional[List[Any]] = None,
+) -> List[Any]:
+    """Infer likely CWT break columns when templates vary or config is stale."""
+    excluded_norm = {_normalize_column_key(c) for c in (excluded_columns or []) if c is not None}
+    inferred: List[Any] = []
+    for col in df.columns:
+        norm = _normalize_column_key(col)
+        if not norm or norm in excluded_norm:
+            continue
+        if norm in {"LTL", "L5CWT"}:
+            inferred.append(col)
+            continue
+        if "CWT" in norm:
+            inferred.append(col)
+            continue
+        if norm.isdigit():
+            inferred.append(col)
+    return inferred
+
+
 def parse_apps_tariff(file_path: str, db: Session) -> Tariff:
     """
     Parse APPS FAK Skid Rates 2025.xlsx
@@ -22,7 +145,17 @@ def parse_apps_tariff(file_path: str, db: Session) -> Tariff:
     filename = os.path.basename(file_path)
     config = get_tariff_mapping_for_file(filename, "APPS") or {}
     sheet_name = config.get("sheet")
-    df = pd.read_excel(file_path, sheet_name=sheet_name) if sheet_name else pd.read_excel(file_path)
+    expected_headers = [
+        config.get("dest_city_column", "DESTINATION"),
+        config.get("dest_province_column", "PROV"),
+    ]
+    expected_headers.extend(config.get("spot_columns") or [str(i) for i in range(1, 23)])
+    df = _read_excel_resilient(
+        file_path,
+        sheet_name=sheet_name,
+        expected_headers=expected_headers,
+        header_row=config.get("header_row"),
+    )
     
     # Create or get tariff
     tariff = db.query(Tariff).filter(
@@ -40,12 +173,26 @@ def parse_apps_tariff(file_path: str, db: Session) -> Tariff:
         db.flush()
     
     # Find numeric columns (spot counts)
-    spot_columns = config.get("spot_columns") or [col for col in df.columns if str(col).isdigit()]
+    requested_spots = config.get("spot_columns")
+    resolved_spots = _resolve_break_columns(df, requested_spots) if requested_spots else []
+    spot_columns = resolved_spots or [col for col in df.columns if _normalize_column_key(col).isdigit()]
+    city_col = _resolve_column_name(
+        df,
+        config.get("dest_city_column", "DESTINATION"),
+        ["DESTINATION", "CITY", "DESTINATION CITY"],
+    )
+    province_col = _resolve_column_name(
+        df,
+        config.get("dest_province_column", "PROV"),
+        ["PROV", "PROVINCE"],
+    )
+    if city_col is None or province_col is None:
+        raise ValueError("Could not resolve required APPS destination columns in uploaded file")
     
     for _, row in df.iterrows():
         # Normalize city/province to uppercase for consistent matching
-        dest_city = str(row.get(config.get("dest_city_column", "DESTINATION"), "")).strip().upper()
-        dest_province = str(row.get(config.get("dest_province_column", "PROV"), "")).strip().upper()
+        dest_city = str(row.get(city_col, "")).strip().upper()
+        dest_province = str(row.get(province_col, "")).strip().upper()
         
         if not dest_city or not dest_province:
             continue
@@ -108,7 +255,6 @@ def parse_cwt_tariff(
     filename = os.path.basename(file_path)
     config_override = get_tariff_mapping_for_file(filename, carrier_name) or {}
     sheet_name = config_override.get("sheet")
-    df = pd.read_excel(file_path, sheet_name=sheet_name) if sheet_name else pd.read_excel(file_path)
     
     # Create or get tariff
     tariff = db.query(Tariff).filter(
@@ -132,7 +278,31 @@ def parse_cwt_tariff(
     dest_city_column = config_override.get("dest_city_column")
     dest_province_column = config_override.get("dest_province_column", "PROV")
     break_columns = config_override.get("breaks", break_columns)
-    
+
+    expected_headers = [
+        dest_city_column or "DESTINATION",
+        "DESTINATION CITY",
+        "CITY",
+        dest_province_column,
+        min_col,
+        "LTL",
+        "500",
+        "1000",
+        "2000",
+        "5000",
+        "10000",
+    ]
+    if break_columns:
+        for break_def in break_columns:
+            expected_headers.append(break_def.get("column") if isinstance(break_def, dict) else break_def)
+
+    df = _read_excel_resilient(
+        file_path,
+        sheet_name=sheet_name,
+        expected_headers=expected_headers,
+        header_row=config_override.get("header_row"),
+    )
+
     if break_columns is None:
         inferred_breaks = []
         for col in df.columns:
@@ -141,19 +311,43 @@ def parse_cwt_tariff(
                 if col_str not in ["DESTINATION", "CITY", "PROV", "MIN", "LTL"]:
                     inferred_breaks.append(col)
         break_columns = inferred_breaks
-    
+
+    city_col = _resolve_column_name(
+        df,
+        dest_city_column or "DESTINATION",
+        ["CITY", "DESTINATION", "DESTINATION CITY", "LOCATION"],
+    )
+    province_col = _resolve_column_name(
+        df,
+        dest_province_column,
+        ["PROV", "PROVINCE", "STATE"],
+    )
+    min_charge_col = _resolve_column_name(
+        df,
+        min_col,
+        ["MIN", "MINIMUM", "MIN CHARGE", "MINCHARGE", "LTL MIN", "LTLMIN"],
+    )
+
+    if province_col is None:
+        raise ValueError("Could not resolve province column for CWT tariff sheet")
+
+    resolved_break_columns = _resolve_break_columns(df, break_columns)
+    if not resolved_break_columns:
+        resolved_break_columns = _infer_cwt_break_columns(
+            df,
+            excluded_columns=[city_col, province_col, min_charge_col],
+        )
+
     # Determine city column name
-    city_col = dest_city_column or ("CITY" if "CITY" in df.columns else "DESTINATION")
-    
     for _, row in df.iterrows():
         # Normalize city/province to uppercase for consistent matching
-        dest_city = str(row.get(city_col, "")).strip().upper()
-        dest_province = str(row.get(dest_province_column, "")).strip().upper()
+        dest_city = str(row.get(city_col, "")).strip().upper() if city_col else ""
+        dest_province = str(row.get(province_col, "")).strip().upper()
         
         if not dest_province:
             continue
         
-        min_charge = row.get(min_col)
+        min_charge = row.get(min_charge_col) if min_charge_col else None
         if pd.isna(min_charge):
             min_charge = None
         
@@ -209,7 +403,7 @@ def parse_cwt_tariff(
             "1000CWT": (100000, None),  # Open-ended
         }
         
-        for break_def in break_columns:
+        for break_def in resolved_break_columns:
             if isinstance(break_def, dict):
                 break_col = break_def.get("column")
                 rate = row.get(break_col)
@@ -291,4 +485,3 @@ def ingest_cff_tariff(file_path: str, db: Session) -> Tariff:
     """Parse CFF ex CGY 10lbs cwt to Western Canada Safety Express 2025.xlsx"""
     break_cols = ["LTL", "500", "1000", "2000", "5000", "10000"]
     return parse_cwt_tariff(file_path, db, "CFF", "CGY", "MIN", break_cols)
-
