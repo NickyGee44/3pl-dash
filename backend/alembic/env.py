@@ -14,7 +14,17 @@ load_dotenv()
 
 # Import Base and models
 from app.db.database import Base
-from app.models import Customer, AuditRun, SourceFile, Shipment, AuditResult, LaneStat
+from app.models import (
+    Customer,
+    AuditRun,
+    SourceFile,
+    Shipment,
+    AuditResult,
+    LaneStat,
+    Tariff,
+    TariffLane,
+    TariffBreak,
+)
 
 # this is the Alembic Config object
 config = context.config
@@ -67,5 +77,4 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-
 

@@ -13,7 +13,7 @@ import pandas as pd
 import time
 import logging
 from app.db.database import get_db, settings
-from app.models import AuditRun, SourceFile, Shipment
+from app.models import AuditRun, SourceFile, Shipment, AuditResult
 from app.schemas.source_file import SourceFileResponse, FileMappingRequest, ColumnMapping
 from app.services.file_parser import (
     infer_file_type, read_file, infer_column_mapping, infer_source_type
@@ -160,8 +160,19 @@ async def normalize_file(
             detail="Audit run not found"
         )
     
-    # Delete existing shipments from this file (for reprocessing)
-    db.query(Shipment).filter(Shipment.source_file_id == file_id).delete()
+    # Delete existing normalized rows from this file (for reprocessing).
+    # Remove dependent audit results first to avoid FK conflicts.
+    existing_shipment_ids = [
+        row[0]
+        for row in db.query(Shipment.id).filter(Shipment.source_file_id == file_id).all()
+    ]
+    if existing_shipment_ids:
+        db.query(AuditResult).filter(
+            AuditResult.shipment_id.in_(existing_shipment_ids)
+        ).delete(synchronize_session=False)
+        db.query(Shipment).filter(Shipment.id.in_(existing_shipment_ids)).delete(
+            synchronize_session=False
+        )
     
     try:
         timings = {}

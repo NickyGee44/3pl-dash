@@ -2,14 +2,43 @@
 Main FastAPI application entry point.
 """
 import logging
+import os
 import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import audits, files, reports, customers, tariffs
-from app.db.database import engine, Base
+
+
+def _install_request_id_default() -> None:
+    """Ensure non-request logs still have a request_id field."""
+    old_factory = logging.getLogRecordFactory()
+
+    def record_factory(*args, **kwargs):
+        record = old_factory(*args, **kwargs)
+        if not hasattr(record, "request_id"):
+            record.request_id = "-"
+        return record
+
+    logging.setLogRecordFactory(record_factory)
+
+
+def _parse_cors_origins(raw_value: str) -> list[str]:
+    """
+    Parse CORS origins from either:
+    - Comma-separated string: "https://a.com,https://b.com"
+    - JSON-like list string: ["https://a.com", "https://b.com"]
+    """
+    value = (raw_value or "").strip()
+    if not value:
+        return []
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1]
+        return [origin.strip().strip("'\"") for origin in inner.split(",") if origin.strip().strip("'\"")]
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
 
 # Configure logging
+_install_request_id_default()
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s'
@@ -30,9 +59,6 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         
         return response
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(
     title="3PL Links Freight Audit Platform",
     description="Freight audit and analytics platform",
@@ -43,8 +69,9 @@ app = FastAPI(
 app.add_middleware(RequestIDMiddleware)
 
 # CORS middleware with enhanced configuration
-import os
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+cors_origins = _parse_cors_origins(
+    os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,5 +99,4 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
-
 

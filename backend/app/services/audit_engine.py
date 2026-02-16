@@ -36,7 +36,7 @@ def compute_flags(shipment: Shipment, cost_per_lb: Optional[Decimal] = None) -> 
     """Compute exception flags for a shipment."""
     flags = []
     
-    if not shipment.actual_charge or shipment.actual_charge <= 0:
+    if shipment.actual_charge is None or shipment.actual_charge == 0:
         flags.append("ZERO_CHARGE")
     elif shipment.actual_charge < 0:
         flags.append("NEGATIVE_PRICE")
@@ -401,6 +401,10 @@ def get_exceptions(db: Session, audit_run_id: UUID, exception_type: str = "all")
     
     exception_type: "zero_charge", "outliers", "zero_weight", "all"
     """
+    normalized_exception_type = (
+        (exception_type or "all").strip().lower().replace("-", "_").replace(" ", "_")
+    )
+
     shipments = db.query(Shipment).join(
         AuditResult, Shipment.id == AuditResult.shipment_id
     ).filter(
@@ -416,7 +420,16 @@ def get_exceptions(db: Session, audit_run_id: UUID, exception_type: str = "all")
         
         flags = audit_result.flags or []
         
-        if exception_type == "all" or exception_type in [f.lower().replace("_", "") for f in flags]:
+        normalized_flags = {flag.lower() for flag in flags}
+        include = False
+        if normalized_exception_type == "all":
+            include = True
+        elif normalized_exception_type == "outliers":
+            include = bool(audit_result.cost_per_lb and audit_result.cost_per_lb > 0)
+        elif normalized_exception_type in normalized_flags:
+            include = True
+
+        if include:
             exceptions.append({
                 "shipment_id": str(shipment.id),
                 "shipment_ref": shipment.shipment_ref,
@@ -435,10 +448,9 @@ def get_exceptions(db: Session, audit_run_id: UUID, exception_type: str = "all")
             })
     
     # For outliers, sort by cost_per_lb descending
-    if exception_type == "outliers":
+    if normalized_exception_type == "outliers":
         exceptions.sort(key=lambda x: x["cost_per_lb"] or 0, reverse=True)
         # Return top 50
         exceptions = exceptions[:50]
     
     return exceptions
-
