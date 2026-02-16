@@ -1,4 +1,4 @@
 providers = ["python"]
 
 [phases.build]
-cmds = ["pip install -r backend/requirements.txt"]
+cmds = ["python3 -m venv /opt/venv && /opt/venv/bin/pip install -r backend/requirements.txt"]
