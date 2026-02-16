@@ -28,7 +28,8 @@ export default function TariffLibrary() {
     setLoading(true)
     setError(null)
     try {
-      const response = await api.get('/tariffs')
+      // Avoid backend redirect from /api/tariffs -> /api/tariffs/ (can break behind proxies).
+      const response = await api.get('/tariffs/')
       setTariffs(response.data)
     } catch (err) {
       console.error('Error loading tariffs', err)
@@ -168,4 +169,3 @@ export default function TariffLibrary() {
     </div>
   )
 }
-
